@@ -1,0 +1,156 @@
+#define BLYNK_TEMPLATE_ID "TMPL2ok3gR1_o"
+#define BLYNK_TEMPLATE_NAME "TESRT"
+#define BLYNK_AUTH_TOKEN "79e0dQERiavTNvULyGOEJyOrlzI7kWmw"
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <BlynkSimpleEsp32.h>
+
+// ⚙️ Configuración WiFi
+char ssid[] ="CHRISKATECHRIS";
+char pass[] = "CGDBGRUPO2020";
+
+// ⚙️ Pines
+#define PIR_PIN 33
+#define LED_PIN 26
+#define BUZZER_PIN 27
+
+// ⚙️ Variables globales
+bool alarmaActiva = true;
+bool movimientoAnterior = false;
+unsigned long lastDetectionTime = 0;
+const unsigned long alarmaDuracion = 1000; // 1 segundo
+
+BlynkTimer timer;
+
+// 🧠 Control desde la app (V1)
+BLYNK_WRITE(V1) {
+  alarmaActiva = param.asInt();
+  Serial.print("📱 Alarma ");
+  Serial.println(alarmaActiva ? "activada" : "desactivada");
+}
+
+// 🧠 Conexión manual a WiFi
+void conectarWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.print("🌐 Conectando a WiFi: ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, pass);
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+      Serial.print(".");
+      delay(500);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\n✅ WiFi conectado correctamente!");
+      Serial.print("📶 IP: ");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("\n❌ No se pudo conectar al WiFi, reintentando...");
+    }
+  }
+}
+
+// 🧠 Intento de conexión a Blynk
+void conectarBlynk() {
+  if (!Blynk.connected()) {
+    Serial.println("🔗 Conectando a Blynk...");
+    Blynk.connect(5000); // intenta durante 5 segundos
+    if (Blynk.connected()) {
+      Serial.println("✅ Conectado a Blynk!");
+    } else {
+      Serial.println("❌ Falló la conexión a Blynk, reintentará más tarde.");
+    }
+  }
+}
+
+// 🧠 Configuración inicial
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n--- 🔔 Sistema de Alarma Iniciado ---");
+
+  pinMode(PIR_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  conectarWiFi();
+
+  // Inicializa Blynk (sin bloquear)
+  Blynk.config(BLYNK_AUTH_TOKEN);
+  conectarBlynk();
+
+  // Configura tareas periódicas
+  timer.setInterval(200L, leerPIR);          // leer PIR cada 200 ms
+  timer.setInterval(10000L, conectarWiFi);   // reintenta WiFi cada 10 seg
+  timer.setInterval(15000L, conectarBlynk);  // reintenta Blynk cada 15 seg
+
+  Serial.println("✅ Setup completado. Sistema listo.");
+}
+
+// 🧠 Lectura del sensor PIR
+void leerPIR() {
+  bool movimiento = digitalRead(PIR_PIN);
+
+  if (movimiento != movimientoAnterior) {
+    movimientoAnterior = movimiento;
+
+    if (movimiento) {
+      Serial.println("🚨 Movimiento detectado!");
+      Blynk.virtualWrite(V2, 1);
+
+      if (alarmaActiva) {
+        digitalWrite(LED_PIN, HIGH);
+        digitalWrite(BUZZER_PIN, HIGH);
+        Blynk.logEvent("movimiento_detectado", "¡Movimiento detectado!");
+        lastDetectionTime = millis();
+        enviarEvento("Movimiento detectado", "Alarma activa");
+      } else {
+        Serial.println("⚠️ Movimiento detectado, pero la alarma está desactivada.");
+        enviarEvento("Movimiento detectado", "Alarma desactivada");
+      }
+
+    } else {
+      Blynk.virtualWrite(V2, 0);
+    }
+  }
+
+  // Apagar alarma tras 1 segundo
+  if (digitalRead(BUZZER_PIN) == HIGH && millis() - lastDetectionTime > alarmaDuracion) {
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+// 🔁 Loop principal
+void loop() {
+  if (Blynk.connected()) {
+    Blynk.run();
+  }
+  timer.run();
+}
+
+// 📨 Envío de evento a Google Sheets
+void enviarEvento(String evento, String estado) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = "https://script.google.com/macros/s/AKfycbwLje9V5PLFuspBLznWKR6uZIlk5AbVTPM3Cn-BNIGXvUAmGTfxVMajDLPDPht2YtB8/exec";
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+
+    String payload = "{\"evento\":\"" + evento + "\",\"estado\":\"" + estado + "\"}";
+    int httpResponseCode = http.POST(payload);
+
+    if (httpResponseCode > 0) {
+      Serial.println("📤 Evento enviado a Google Sheets: " + evento);
+    } else {
+      Serial.println("⚠️ Error enviando evento: " + String(httpResponseCode));
+    }
+    http.end();
+  } else {
+    Serial.println("❌ WiFi no conectado, no se pudo enviar a Sheets.");
+  }
+}
