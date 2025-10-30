@@ -1,0 +1,28 @@
+function doPost(e) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  
+  try {
+    // Verificar que hay datos
+    if (!e.postData || !e.postData.contents) {
+      Logger.log("❌ No hay datos en el POST");
+      return ContentService.createTextOutput("No hay datos");
+    }
+    
+    // Intentar parsear el JSON
+    var data = JSON.parse(e.postData.contents);
+    
+    // Validar campos
+    var evento = data.evento || "Sin evento";
+    var estado = data.estado || "Sin estado";
+    
+    // Escribir en la hoja
+    sheet.appendRow([new Date(), evento, estado]);
+    
+    Logger.log("✅ Evento registrado: " + evento + " - " + estado);
+    return ContentService.createTextOutput("OK");
+    
+  } catch (err) {
+    Logger.log("❌ Error: " + err);
+    return ContentService.createTextOutput("Error: " + err);
+  }
+}
