@@ -137,7 +137,7 @@ void loop() {
 void enviarEvento(String evento, String estado) {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    String url = "https://script.google.com/macros/s/AKfycbwLje9V5PLFuspBLznWKR6uZIlk5AbVTPM3Cn-BNIGXvUAmGTfxVMajDLPDPht2YtB8/exec";
+    String url = "";
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
 
