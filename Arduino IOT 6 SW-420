@@ -1,0 +1,168 @@
+#define BLYNK_TEMPLATE_ID ""
+#define BLYNK_TEMPLATE_NAME ""
+#define BLYNK_AUTH_TOKEN ""
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <BlynkSimpleEsp32.h>
+
+// ⚙️ Configuración WiFi
+char ssid[] = "";
+char pass[] = "";
+
+// ⚙️ Pines
+#define SW420_PIN 33
+#define LED_PIN 26
+#define BUZZER_PIN 27
+
+// ⚙️ Variables globales
+bool alarmaActiva = true;
+bool vibracionAnterior = false;
+unsigned long lastDetectionTime = 0;
+const unsigned long alarmaDuracion = 1000; // 1 segundo
+
+// 🔢 Contador de vibraciones
+unsigned int contadorVibraciones = 0;       // Total de vibraciones detectadas
+const unsigned long intervaloRegistro = 30000; // 1 minuto (60000 ms)
+
+// 🧠 Temporizador de Blynk
+BlynkTimer timer;
+
+// 🧠 Control desde la app (V1)
+BLYNK_WRITE(V1) {
+  alarmaActiva = param.asInt();
+  Serial.print("📱 Alarma ");
+  Serial.println(alarmaActiva ? "activada" : "desactivada");
+}
+
+// 🧠 Conexión manual a WiFi
+void conectarWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.print("🌐 Conectando a WiFi: ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, pass);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+      Serial.print(".");
+      delay(500);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\n✅ WiFi conectado correctamente!");
+      Serial.print("📶 IP: ");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("\n❌ No se pudo conectar al WiFi.");
+    }
+  }
+}
+
+// 🧠 Intento de conexión a Blynk
+void conectarBlynk() {
+  if (!Blynk.connected()) {
+    Serial.println("🔗 Conectando a Blynk...");
+    Blynk.connect(5000);
+    if (Blynk.connected()) Serial.println("✅ Conectado a Blynk!");
+    else Serial.println("❌ Falló la conexión a Blynk.");
+  }
+}
+
+// 🧠 Configuración inicial
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n--- 💥 Monitor de Vibración Iniciado ---");
+
+  pinMode(SW420_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  conectarWiFi();
+  Blynk.config(BLYNK_AUTH_TOKEN);
+  conectarBlynk();
+
+  // 🔁 Timers
+  timer.setInterval(200L, leerVibracion);          // Leer sensor cada 200 ms
+  timer.setInterval(10000L, conectarWiFi);         // Reintento WiFi cada 10 seg
+  timer.setInterval(15000L, conectarBlynk);        // Reintento Blynk cada 15 seg
+  timer.setInterval(intervaloRegistro, enviarConteo); // Enviar conteo cada minuto
+
+  Serial.println("✅ Setup completado. Sistema listo.");
+}
+
+// 🧠 Lectura del sensor SW-420
+void leerVibracion() {
+  bool vibracion = digitalRead(SW420_PIN);
+
+  if (vibracion != vibracionAnterior) {
+    vibracionAnterior = vibracion;
+
+    if (vibracion) {
+      contadorVibraciones++; // 🔢 Suma una vibración
+      Serial.println("💥 Vibración detectada!");
+      Blynk.virtualWrite(V2, 1);
+
+      if (alarmaActiva) {
+        digitalWrite(LED_PIN, HIGH);
+        digitalWrite(BUZZER_PIN, HIGH);
+
+        // 🔔 Notificación push en Blynk
+        Blynk.logEvent("vibracion_detectada", "¡Vibración detectada!");
+
+        lastDetectionTime = millis();
+        enviarEvento("Vibración detectada", "Alarma activa");
+      } else {
+        Serial.println("⚠️ Vibración detectada, pero alarma desactivada.");
+        enviarEvento("Vibración detectada", "Alarma desactivada");
+      }
+    } else {
+      Blynk.virtualWrite(V2, 0);
+    }
+  }
+
+  // Apagar alarma tras 1 segundo
+  if (digitalRead(BUZZER_PIN) == HIGH && millis() - lastDetectionTime > alarmaDuracion) {
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+// 🔢 Enviar conteo de vibraciones al Blynk y Google Sheets
+void enviarConteo() {
+  Serial.print("📈 Vibraciones detectadas en el periodo: ");
+  Serial.println(contadorVibraciones);
+
+  // Mostrar en el widget V3
+  Blynk.virtualWrite(V3, contadorVibraciones);
+
+  // Enviar registro al Google Sheets
+  enviarEvento("Conteo de vibraciones", String(contadorVibraciones));
+
+  // Reiniciar contador
+  contadorVibraciones = 0;
+}
+
+// 🔁 Loop principal
+void loop() {
+  if (Blynk.connected()) Blynk.run();
+  timer.run();
+}
+
+// 📨 Envío de evento a Google Sheets
+void enviarEvento(String evento, String estado) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = "";
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    String payload = "{\"evento\":\"" + evento + "\",\"estado\":\"" + estado + "\"}";
+    int httpResponseCode = http.POST(payload);
+    if (httpResponseCode > 0)
+      Serial.println("📤 Evento enviado a Google Sheets: " + evento);
+    else
+      Serial.println("⚠️ Error enviando evento: " + String(httpResponseCode));
+    http.end();
+  } else {
+    Serial.println("❌ WiFi no conectado, no se pudo enviar a Sheets.");
+  }
+}
