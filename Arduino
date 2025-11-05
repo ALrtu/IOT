@@ -1,14 +1,14 @@
-#define BLYNK_TEMPLATE_ID "TMPL2ok3gR1_o"
-#define BLYNK_TEMPLATE_NAME "TESRT"
-#define BLYNK_AUTH_TOKEN "79e0dQERiavTNvULyGOEJyOrlzI7kWmw"
+#define BLYNK_TEMPLATE_ID ""
+#define BLYNK_TEMPLATE_NAME ""
+#define BLYNK_AUTH_TOKEN ""
 
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <BlynkSimpleEsp32.h>
 
 // ⚙️ Configuración WiFi
-char ssid[] ="CHRISKATECHRIS";
-char pass[] = "CGDBGRUPO2020";
+char ssid[] ="";
+char pass[] = "";
 
 // ⚙️ Pines
 #define PIR_PIN 33
