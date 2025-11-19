@@ -1,0 +1,175 @@
+#include <SPI.h>
+#include <LoRa.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+// ------------------ CONFIGURACIÓN LORA ------------------
+#define SS 5
+#define RST 14
+#define DIO0 2
+#define BAND 915E6
+#define SCK 18
+#define MISO 19
+#define MOSI 27
+// ------------------ MOTOR ------------------
+const int PWMA = 21;
+const int AIN1 = 22;
+const int freq = 1000;
+const int resolution = 8;
+// ------------------ LED ------------------
+#define LED_PIN 26
+// ------------------ WiFi + ThingSpeak ------------------
+const char* ssid = "CHRISKATECHRIS";
+const char* password = "CGDBGRUPO2020";
+String readAPIKey = "9I54V3YIITWDENG0";
+unsigned long channelID = 3159110;
+const char* server = "api.thingspeak.com";
+// ------------------ VARIABLES ------------------
+float temperatura = 0;
+float humedad = 0;
+float umbralTemp = 30.0;
+ 
+unsigned long lastCheck = 0;
+const int interval = 15000;
+ 
+// ------------------ SISTEMA DE RESPALDO ------------------
+unsigned long ultimoPaqueteLoRa = 0;
+const unsigned long tiempoMaxSinLoRa = 20000; // 20 segundos sin LoRa → usar ThingSpeak
+ 
+// ---------------------------------------------------------------------
+void motorA(int velocidad) {
+  digitalWrite(AIN1, velocidad > 0 ? HIGH : LOW);
+  ledcWrite(PWMA, abs(velocidad));
+}
+void pararMotor() {
+  ledcWrite(PWMA, 0);
+}
+void conectarWiFi() {
+  Serial.print("Conectando WiFi...");
+  WiFi.begin(ssid, password);
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 7000) {
+    Serial.print(".");
+    delay(400);
+  }
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED)
+    Serial.println("✅ WiFi Conectado");
+  else
+    Serial.println("⚠️ No conectado");
+}
+void checkWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    conectarWiFi();
+  }
+}
+// ---------------------------------------------------------------------
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(AIN1, OUTPUT);
+  ledcAttach(PWMA, freq, resolution);
+  SPI.begin(SCK, MISO, MOSI, SS);
+  Serial.println("Iniciando LoRa...");
+  LoRa.setPins(SS, RST, DIO0);
+  if (!LoRa.begin(BAND)) {
+    Serial.println("❌ Error LoRa");
+    while (1);
+  }
+  LoRa.setSpreadingFactor(12);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  Serial.println("✅ LoRa listo.");
+  conectarWiFi();
+}
+// ---------------------------------------------------------------------
+void recibirLoRa() {
+  int packetSize = LoRa.parsePacket();
+  if (!packetSize) return;
+  String data = LoRa.readString();
+  Serial.print("📩 Paquete recibido: ");
+  Serial.println(data);
+  int coma = data.indexOf(',');
+  if (coma > 0) {
+    temperatura = data.substring(0, coma).toFloat();
+    humedad = data.substring(coma + 1).toFloat();
+ 
+    // Registro del tiempo del último paquete LoRa
+    ultimoPaqueteLoRa = millis();
+ 
+    Serial.printf("➡ Temp: %.2f | Hum: %.2f\n", temperatura, humedad);
+  }
+}
+// Leer temperatura y humedad desde ThingSpeak
+void leerTemperaturaThingSpeak() {
+  if (WiFi.status() != WL_CONNECTED) return;
+ 
+  HTTPClient http;
+ 
+  // Campo 1: Temperatura
+  String urlTemp = "http://" + String(server) + "/channels/" + String(channelID) +
+                   "/fields/1/last.txt?api_key=" + readAPIKey;
+ 
+  http.begin(urlTemp);
+  int httpCode = http.GET();
+ 
+  if (httpCode == 200) {
+    temperatura = http.getString().toFloat();
+    Serial.printf("🌡 Temp desde ThingSpeak: %.2f\n", temperatura);
+  }
+  http.end();
+ 
+  // Campo 2: Humedad
+  String urlHum = "http://" + String(server) + "/channels/" + String(channelID) +
+                  "/fields/2/last.txt?api_key=" + readAPIKey;
+ 
+  http.begin(urlHum);
+  httpCode = http.GET();
+ 
+  if (httpCode == 200) {
+    humedad = http.getString().toFloat();
+    Serial.printf("💧 Hum desde ThingSpeak: %.2f\n", humedad);
+  }
+  http.end();
+}
+ 
+void leerUmbralThingSpeak() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  String url = "http://" + String(server) + "/channels/" + String(channelID) +
+               "/fields/3/last.txt?api_key=" + readAPIKey;
+  http.begin(url);
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    umbralTemp = http.getString().toFloat();
+    Serial.printf("📡 Umbral leído: %.2f\n", umbralTemp);
+  }
+  http.end();
+}
+void verificarTemperatura() {
+  Serial.printf("🔍 Comparando: %.2f > %.2f ?\n", temperatura, umbralTemp);
+  if (temperatura > umbralTemp) {
+    Serial.println("🔥 Sobre umbral → Motor ON, LED ON");
+    motorA(200);
+    digitalWrite(LED_PIN, HIGH);
+  } else {
+    Serial.println("✅ Dentro del rango → Motor OFF, LED OFF");
+    pararMotor();
+    digitalWrite(LED_PIN, LOW);
+  }
+}
+// ---------------------------------------------------------------------
+void loop() {
+  recibirLoRa();
+  checkWiFi();
+ 
+  // Si no hay datos LoRa recientes → usar ThingSpeak
+  if (millis() - ultimoPaqueteLoRa > tiempoMaxSinLoRa) {
+    Serial.println("⚠️ No hay datos LoRa → leyendo desde ThingSpeak...");
+    leerTemperaturaThingSpeak();
+  }
+  if (millis() - lastCheck > interval) {
+    lastCheck = millis();
+    leerUmbralThingSpeak();
+    verificarTemperatura();
+  }
+}
