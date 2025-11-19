@@ -1,0 +1,171 @@
+#include <SPI.h>
+#include <LoRa.h>
+#include <WiFi.h>
+#include "DHT.h"
+#include <HTTPClient.h>
+
+// ------------------ CONFIGURACIÓN SENSOR DHT ------------------
+#define DHTPIN 15
+#define DHTTYPE DHT21
+DHT dht(DHTPIN, DHTTYPE);
+
+// ------------------ CONFIGURACIÓN LORA ------------------
+#define SS 5
+#define RST 14
+#define DIO0 2
+#define BAND 915E6
+#define SCK 18
+#define MISO 19
+#define MOSI 27
+
+// ------------------ CONFIGURACIÓN WIFI + THINGSPEAK ------------------
+const char* ssid = "Galaxy A35 5G EC66";
+const char* password = "amoaminovia";
+const char* apiKey = "O47YDVUZYGIBJC3C";
+const char* server = "api.thingspeak.com";
+
+// ------------------ VARIABLES ------------------
+float temperatura = 0;
+float humedad = 0;
+float lastTempSent = -999;
+float lastHumSent = -999;
+
+const float deltaTemp = 0.5;
+const float deltaHum = 1.0;
+
+unsigned long lastSendTime = 0;
+const unsigned long interval = 15000;
+
+// ---------------------------------------------------------------------
+
+void conectarWiFi() {
+  Serial.print("Conectando a WiFi: ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 8000) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("✅ WiFi conectado!");
+  } else {
+    Serial.println("⚠️ No se pudo conectar a WiFi.");
+  }
+}
+
+void checkWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️ Reconectando WiFi...");
+    conectarWiFi();
+  }
+}
+
+void leerSensor() {
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  if (!isnan(h) && !isnan(t)) {
+    humedad = h;
+    temperatura = t;
+
+    Serial.printf("🌡 Temp: %.2f °C | Hum: %.2f %%\n", temperatura, humedad);
+  } else {
+    Serial.println("❌ Error al leer DHT21");
+  }
+}
+
+void enviarLoRa() {
+  LoRa.beginPacket();
+  LoRa.print(temperatura);
+  LoRa.print(",");
+  LoRa.print(humedad);
+  LoRa.endPacket();
+
+  Serial.printf("📡 LoRa Enviado → %.2f , %.2f\n", temperatura, humedad);
+}
+
+void enviarThingSpeak() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️ Sin WiFi, no se envía a ThingSpeak.");
+    return;
+  }
+
+  HTTPClient http;
+  String url = "http://" + String(server) + "/update?api_key=" + apiKey +
+               "&field1=" + String(temperatura) +
+               "&field2=" + String(humedad);
+
+  http.begin(url);
+  int httpCode = http.GET();
+
+  if (httpCode == 200)
+    Serial.println("📡 Datos enviados a ThingSpeak");
+  else
+    Serial.println("⚠️ Error enviando ThingSpeak");
+
+  http.end();
+}
+
+// ---------------------------------------------------------------------
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  SPI.begin(SCK, MISO, MOSI, SS);
+
+  Serial.println("Iniciando LoRa...");
+  LoRa.setPins(SS, RST, DIO0);
+  
+  if (!LoRa.begin(BAND)) {
+    Serial.println("❌ Error LoRa");
+    while (1);
+  }
+
+  // 🔧 CONFIGURACIÓN LORA ROBUSTA
+  LoRa.setSpreadingFactor(12);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.setTxPower(20);
+
+  Serial.println("✅ LoRa listo.");
+
+  conectarWiFi();
+}
+
+// ---------------------------------------------------------------------
+
+void loop() {
+  checkWiFi();
+
+  if (millis() - lastSendTime > interval) {
+    lastSendTime = millis();
+
+    leerSensor();
+
+    bool cambia = false;
+
+    if (fabs(temperatura - lastTempSent) >= deltaTemp)
+      cambia = true;
+
+    if (fabs(humedad - lastHumSent) >= deltaHum)
+      cambia = true;
+
+    if (cambia) {
+      Serial.println("📤 Cambio detectado → enviando...");
+      enviarLoRa();
+      enviarThingSpeak();
+
+      lastTempSent = temperatura;
+      lastHumSent = humedad;
+    } else {
+      Serial.println("⏳ Sin cambio significativo.");
+    }
+  }
+}
